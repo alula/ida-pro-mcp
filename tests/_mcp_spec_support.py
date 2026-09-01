@@ -196,11 +196,26 @@ class McpHttpTestServer:
         self.host = "127.0.0.1"
         self.port = _pick_free_port(self.host)
         self.base_url = f"http://{self.host}:{self.port}"
+        self.session_id: str | None = None
 
     def __enter__(self) -> "McpHttpTestServer":
         self.server.serve(self.host, self.port, background=True)
         _wait_until_ready(self.base_url + "/mcp")
+        self.session_id = self._initialize_session()
         return self
+
+    def _initialize_session(self) -> str | None:
+        """Handshake like a real client: the server requires a session id."""
+        _, hdrs, _ = self.post_jsonrpc(
+            "initialize",
+            params={
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "spec-tests", "version": "0"},
+            },
+            with_session=False,
+        )
+        return next((hdrs[k] for k in hdrs if k.lower() == "mcp-session-id"), None)
 
     def __exit__(self, *exc_info: Any) -> None:
         self.server.stop()
@@ -213,6 +228,7 @@ class McpHttpTestServer:
         request_id: Any = 1,
         extra_headers: dict[str, str] | None = None,
         notification: bool = False,
+        with_session: bool = True,
     ) -> tuple[int, dict[str, str], dict[str, Any] | None]:
         payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
         if not notification:
@@ -225,6 +241,8 @@ class McpHttpTestServer:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        if with_session and self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
         if extra_headers:
             headers.update(extra_headers)
 

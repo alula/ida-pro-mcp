@@ -28,6 +28,7 @@ from ..api_types import (
 
 TEST_STRUCT_NAME = "__TestStruct__"
 NAME_RESOLUTION_STRUCT = "__NameResolutionTest__"
+PACK_REGRESSION_STRUCT = "__PackRegressionTest__"
 CRACKME_DSO_HANDLE = "0x4008"
 CRACKME_CHECK_PW = "0x11a9"
 TYPE_APPLY_SIGNATURE = "int"
@@ -89,6 +90,30 @@ def test_declare_type_invalid_declaration():
     result = declare_type("struct broken { int x }")
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Failed to parse")
+
+
+@test()
+def test_declare_type_uses_default_packing():
+    """declare_type must not force #pragma pack(2) on declared structs."""
+    declare_type(
+        f"struct {PACK_REGRESSION_STRUCT} {{ short head; void *tail; }};"
+    )
+    result = type_inspect({"name": PACK_REGRESSION_STRUCT, "include_members": True})
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_ok(entry, "members")
+
+    members = entry["members"]
+    assert_is_list(members, min_length=2)
+    ptr_size = members[1]["size"]
+    tail_offset = int(members[1]["offset"], 16)
+    assert tail_offset == ptr_size, (
+        f"pointer member packed to offset {tail_offset}, expected natural "
+        f"alignment {ptr_size} (pack override leaked into the declaration)"
+    )
+    assert entry["size"] == 2 * ptr_size, (
+        f"struct size {entry['size']}, expected {2 * ptr_size} with default packing"
+    )
 
 
 @test()

@@ -232,6 +232,7 @@ class IdalibSupervisor:
         self.mcp = mcp
         self.max_workers = max_workers
         self.worker_args = worker_args or []
+        self.supervisor_session_id = f"supervisor-{uuid.uuid4()}"
         self.sessions: dict[str, WorkerSession] = {}
         self.path_to_session: dict[str, str] = {}
         self._schema_worker: WorkerSession | None = None
@@ -439,6 +440,15 @@ class IdalibSupervisor:
             return f"/mcp?ext={','.join(enabled)}"
         return "/mcp"
 
+    def _worker_request_session_id(self) -> str:
+        """Workers require a session id; reuse the caller's so traces line up."""
+        transport_session_id = self.mcp.get_current_transport_session_id()
+        if transport_session_id and ":" in transport_session_id:
+            transport, session_id = transport_session_id.split(":", 1)
+            if transport in ("http", "sse") and session_id and session_id != "anonymous":
+                return session_id
+        return self.supervisor_session_id
+
     def _worker_rpc(
         self,
         worker: WorkerSession,
@@ -456,6 +466,7 @@ class IdalibSupervisor:
                 {
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
+                    "Mcp-Session-Id": self._worker_request_session_id(),
                 },
             )
             response = conn.getresponse()

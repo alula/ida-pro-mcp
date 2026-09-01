@@ -242,7 +242,10 @@ class HttpContentTypeAndHeadersTests(unittest.TestCase):
 class HttpSessionManagementTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.harness = McpHttpTestServer(_make_server())
+        server = _make_server()
+        # Pin enforcement so the suite does not depend on IDA_MCP_REQUIRE_SESSION.
+        server.require_streamable_http_session = True
+        cls.harness = McpHttpTestServer(server)
         cls.harness.__enter__()
 
     @classmethod
@@ -262,6 +265,30 @@ class HttpSessionManagementTests(unittest.TestCase):
         if session_id is not None:
             self.assertGreater(len(session_id), 0)
 
+    def test_request_without_session_id_is_rejected(self):
+        """Concurrent clients must identify themselves after initialize."""
+        status, _, body = self.harness.post_jsonrpc("ping", with_session=False)
+        self.assertEqual(status, 400)
+        self.assertIsNotNone(body)
+        self.assertIn("Mcp-Session-Id", body["error"]["message"])
+        self.assertEqual(body["error"]["code"], -32600)
+        self.assertEqual(body["id"], 1)
+
+    def test_request_with_session_id_is_accepted(self):
+        status, hdrs, body = self.harness.post_jsonrpc("ping")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"], {})
+        echoed = next((hdrs[k] for k in hdrs if k.lower() == "mcp-session-id"), None)
+        self.assertEqual(echoed, self.harness.session_id)
+
+    def test_session_enforcement_can_be_disabled(self):
+        server = _make_server()
+        server.require_streamable_http_session = False
+        with McpHttpTestServer(server) as harness:
+            status, _, body = harness.post_jsonrpc("ping", with_session=False)
+            self.assertEqual(status, 200)
+            self.assertEqual(body["result"], {})
+
     def test_notification_response_is_bodyless(self):
         payload = json.dumps(
             {"jsonrpc": "2.0", "method": "notifications/initialized"}
@@ -277,6 +304,7 @@ class HttpSessionManagementTests(unittest.TestCase):
                 headers={
                     "Accept": "application/json, text/event-stream",
                     "Content-Type": "application/json",
+                    "Mcp-Session-Id": self.harness.session_id or "",
                 },
             )
             response = connection.getresponse()
@@ -294,7 +322,9 @@ class Http11TransportTests(unittest.TestCase):
         with McpHttpTestServer(_make_server()) as harness:
             body = json.dumps({"jsonrpc": "2.0", "method": "ping", "id": 1}).encode()
             suffix = (
-                f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Mcp-Session-Id: {harness.session_id}\r\n"
+                f"Content-Length: {len(body)}\r\n\r\n"
             ).encode() + body
             self.assertEqual(
                 _raw_status(
@@ -407,7 +437,10 @@ class Http11TransportTests(unittest.TestCase):
                 "POST",
                 "/mcp",
                 body=body,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Mcp-Session-Id": "keepalive-test",
+                },
             )
             response = connection.getresponse()
             self.assertEqual(response.status, 200)

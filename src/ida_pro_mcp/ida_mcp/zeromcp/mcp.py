@@ -1,3 +1,4 @@
+import os
 import re
 import select
 import socket
@@ -19,6 +20,21 @@ from io import BufferedIOBase
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 EXTERNAL_BASE_HEADER = "X-IDA-MCP-External-Base"
+
+MISSING_SESSION_MESSAGE = (
+    "Missing Mcp-Session-Id header. Send 'initialize' first and echo the "
+    "Mcp-Session-Id from its response on every subsequent request. Sessions "
+    "keep concurrent clients from clobbering each other's IDA context."
+)
+
+
+def _require_session_default() -> bool:
+    """Streamable HTTP session enforcement, overridable via IDA_MCP_REQUIRE_SESSION."""
+    value = os.environ.get("IDA_MCP_REQUIRE_SESSION", "").strip().lower()
+    if value in ("0", "false", "no", "off"):
+        return False
+    return True
+
 
 _MAX_CHUNK_LINE = 8192
 _MAX_TRAILER_BYTES = 64 * 1024
@@ -686,14 +702,35 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_missing_session_error(self, request_id) -> None:
+        """Reject a session-less request with a JSON-RPC error, per MCP spec."""
+        payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": MISSING_SESSION_MESSAGE,
+                },
+                "id": request_id,
+            }
+        ).encode("utf-8")
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_cors_headers()
+        self.end_headers()
+        self.wfile.write(payload)
+
     def _handle_mcp_post(self, body: bytes):
         request_method: str | None = None
+        request_id = None
         try:
             parsed = json.loads(body)
             if isinstance(parsed, dict):
                 method = parsed.get("method")
                 if isinstance(method, str):
                     request_method = method
+                request_id = parsed.get("id")
         except Exception:
             pass
 
@@ -704,11 +741,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.mcp_server.register_http_session(mcp_session_id)
         elif self.mcp_server.require_streamable_http_session:
             if mcp_session_id is None:
-                self.send_error(
-                    400,
-                    "Missing Mcp-Session-Id header. Call initialize first and "
-                    "reuse the returned Mcp-Session-Id.",
-                )
+                self._send_missing_session_error(request_id)
                 return
             if not self.mcp_server.has_http_session(mcp_session_id):
                 logger.info(
@@ -783,7 +816,7 @@ class McpServer:
         self._transport_session_id = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
         self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
-        self.require_streamable_http_session = False
+        self.require_streamable_http_session = _require_session_default()
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()

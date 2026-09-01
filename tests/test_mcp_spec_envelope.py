@@ -141,6 +141,7 @@ class MalformedRequestEnvelopeTests(unittest.TestCase):
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": self.harness.session_id or "",
             },
             method="POST",
         )

@@ -124,7 +124,7 @@ def infer_http_transport_type(transport_url: str) -> str:
 
 def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if transport == "stdio":
-        # No --ida-rpc: server auto-discovers running IDA instances
+        # No --ida-rpc: the proxy discovers instances and routes per call
         if client_name == "Opencode":
             mcp_config = {
                 "type": "local",

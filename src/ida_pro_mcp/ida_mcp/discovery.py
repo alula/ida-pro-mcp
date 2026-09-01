@@ -7,6 +7,7 @@ instances by reading these files and validating PID liveness.
 
 import datetime
 import glob
+import hashlib
 import json
 import os
 import socket
@@ -173,6 +174,36 @@ def discover_instances() -> list[InstanceInfo]:
 
     result.sort(key=lambda x: x.get("started_at", ""))
     return result
+
+
+def instance_key(info: InstanceInfo) -> str:
+    """Identity of the database an instance has open, independent of its port."""
+    key = info.get("idb_path") or info.get("binary") or ""
+    if key:
+        return os.path.normcase(key)
+    return f"{info.get('host', '')}:{info.get('port', '')}"
+
+
+def instance_id(info: InstanceInfo, length: int = 4) -> str:
+    """Short id for an instance. Derived from the database, so it survives restarts."""
+    digest = hashlib.blake2s(instance_key(info).encode("utf-8", "replace")).hexdigest()
+    return digest[:length]
+
+
+def assign_instance_ids(
+    instances: list[InstanceInfo], length: int = 4
+) -> dict[str, InstanceInfo]:
+    """Map short ids to instances, widening the hash until the ids are unique.
+
+    Ids are kept short on purpose: they are repeated in every tool call an
+    agent makes, so the length is a token cost.
+    """
+    for width in (length, 8, 12, 32):
+        mapping = {instance_id(i, width): i for i in instances}
+        if len(mapping) == len(instances):
+            return mapping
+    # Two instances on the same database: the port is the only thing left.
+    return {f"{instance_id(i, length)}:{i.get('port')}": i for i in instances}
 
 
 def _find_existing_idb(file_path: str) -> str | None:

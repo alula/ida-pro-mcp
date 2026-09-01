@@ -7,7 +7,6 @@ import ida_hexrays
 import ida_bytes
 import ida_typeinf
 import ida_frame
-import ida_dirtree
 import ida_funcs
 import ida_name
 import ida_ua
@@ -60,8 +59,6 @@ class RenameItemResult(TypedDict, total=False):
     old: str
     new: str | None
     name: str
-    dir: str
-    dir_error: str
     dry_run: bool
     error: str
 
@@ -421,21 +418,6 @@ def rename(
             return [item for item in items if isinstance(item, dict)]
         return []
 
-    def _has_user_name(ea: int) -> bool:
-        flags = idaapi.get_flags(ea)
-        checker = getattr(idaapi, "has_user_name", None)
-        if checker is not None:
-            return checker(flags)
-        try:
-            import ida_name
-
-            checker = getattr(ida_name, "has_user_name", None)
-            if checker is not None:
-                return checker(flags)
-        except Exception:
-            pass
-        return False
-
     def _set_name_checked(ea: int, new_name: str) -> tuple[bool, str | None]:
         return rename_at_ea(
             ea,
@@ -443,37 +425,6 @@ def rename(
             allow_overwrite=allow_overwrite,
             dry_run=dry_run,
         )
-
-    def _place_func_in_vibe_dir(ea: int) -> tuple[bool, str | None]:
-        if dry_run:
-            return True, None
-
-        tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
-        if tree is None:
-            return False, "Function dirtree not available"
-        if not tree.load():
-            return False, "Failed to load function dirtree"
-
-        vibe_path = "/vibe/"
-        if not tree.isdir(vibe_path):
-            err = tree.mkdir(vibe_path)
-            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
-                return False, f"mkdir failed: {err}"
-
-        old_cwd = tree.getcwd()
-        try:
-            if tree.chdir(vibe_path) != ida_dirtree.DTE_OK:
-                return False, "Failed to chdir to vibe"
-            err = tree.link(ea)
-            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
-                return False, f"link failed: {err}"
-            if not tree.save():
-                return False, "Failed to save function dirtree"
-        finally:
-            if old_cwd:
-                tree.chdir(old_cwd)
-
-        return True, None
 
     def _rename_funcs(items: list[FunctionRename]) -> tuple[list[dict], bool]:
         results: list[dict] = []
@@ -509,12 +460,8 @@ def rename(
                     continue
 
                 old_name = idaapi.get_name(func.start_ea) or None
-                had_user_name = _has_user_name(func.start_ea)
                 success, error = _set_name_checked(func.start_ea, str(new_name))
 
-                placed, place_error = None, None
-                if success and not had_user_name:
-                    placed, place_error = _place_func_in_vibe_dir(func.start_ea)
                 if success and not dry_run:
                     refresh_decompiler_ctext(func.start_ea)
 
@@ -525,10 +472,6 @@ def rename(
                 }
                 if error:
                     result["error"] = error
-                if success and placed:
-                    result["dir"] = "vibe"
-                if place_error and success:
-                    result["dir_error"] = place_error
                 if dry_run:
                     result["dry_run"] = True
                 results.append(result)

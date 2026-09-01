@@ -155,6 +155,13 @@ class InferTypeResult(TypedDict, total=False):
 # ============================================================================
 
 
+# parse_decls() takes HTI_* flags, not the PT_* flags used by parse_decl().
+# The two namespaces overlap: PT_EMPTY (0x2000) is HTI_PAK2, so passing PT_*
+# flags here silently forced #pragma pack(2) onto every declared struct.
+# HTI_PAKDEF keeps the database's default packing.
+DECLARE_TYPE_HTI_FLAGS = ida_typeinf.HTI_PAKDEF
+
+
 @tool
 @idasync
 def declare_type(
@@ -166,8 +173,7 @@ def declare_type(
 
     for decl in decls:
         try:
-            flags = ida_typeinf.PT_SIL | ida_typeinf.PT_EMPTY | ida_typeinf.PT_TYP
-            errors, messages = parse_decls_ctypes(decl, flags)
+            errors, messages = parse_decls_ctypes(decl, DECLARE_TYPE_HTI_FLAGS)
 
             pretty_messages = "\n".join(messages)
             if errors > 0:

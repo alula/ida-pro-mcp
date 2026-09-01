@@ -37,11 +37,19 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_URL = "http://127.0.0.1:13337/mcp"
-HEADERS = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+# The server requires a session id on every non-initialize request so concurrent
+# clients stay distinguishable; this script is one client for its whole run.
+SESSION_ID = f"stress-{uuid.uuid4()}"
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+    "Mcp-Session-Id": SESSION_ID,
+}
 
 
 @dataclass

@@ -173,6 +173,49 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
+## Multiple IDA Instances
+
+`ida-pro-mcp` is a proxy: it discovers every interactive IDA that has the MCP
+plugin running and routes each tool call to the one you name. Keep working in
+the GUI and let the agent follow along, across as many open databases as you
+like.
+
+Every IDA registers itself when its plugin server starts, so nothing needs to
+be configured. Start the agent with `list_instances`:
+
+```json
+[
+  {"instance": "a3f1", "binary": "game.exe",     "port": 13337, "pid": 4812, "backend": "gui"},
+  {"instance": "7c0e", "binary": "launcher.exe", "port": 13338, "pid": 5170, "backend": "gui"}
+]
+```
+
+Every other tool then takes a required `instance` argument:
+
+```python
+decompile(addr="main", instance="a3f1")
+```
+
+There is no implicit "current instance". Concurrent agents share one proxy, and
+an implicit target is exactly what makes them clobber each other's context, so
+the target is named on every call. The ids are derived from the open database
+rather than the port, so they survive restarting IDA, and they are kept to four
+characters because an agent repeats them in every single call.
+
+`tools/list` is the union of what every reachable instance exposes, so an
+instance started with `?ext=dbg` or `--unsafe` contributes its extra tools.
+Calling one of those against an instance that lacks it is a normal tool error.
+
+MCP resources (`ida://...`) have no argument to carry an instance id, so they
+are served by the oldest running instance.
+
+To go back to a single fixed target, pin one with `--ida-rpc`. That disables
+discovery and the `instance` argument entirely:
+
+```sh
+uv run ida-pro-mcp --ida-rpc http://127.0.0.1:13337
+```
+
 ## Transports & Headless MCP
 
 You can run an SSE server to connect to the user interface like this:
@@ -255,7 +298,32 @@ The bundled Codex plugin forwards the runtime's `IDA_MCP_*` configuration variab
 - Capacity and lifecycle: `IDA_MCP_MAX_WORKERS`, `IDA_MCP_OPEN_TIMEOUT`, `IDA_MCP_WEDGED_GRACE_SEC`, `IDA_MCP_WORKER_CALL_TIMEOUT`.
 - Health probes: `IDA_MCP_HEALTH_TCP_TIMEOUT`, `IDA_MCP_HEALTH_RPC_TIMEOUT`, `IDA_MCP_HEALTH_RETRIES`, `IDA_MCP_HEALTH_RETRY_BACKOFF`.
 - Worker behavior: `IDA_MCP_TOOL_TIMEOUT_SEC`, `IDA_MCP_ANALYSIS_PROMPT`, `IDA_MCP_URL`.
+- Transport: `IDA_MCP_REQUIRE_SESSION`.
 - Request logging: `IDA_MCP_LOG_REQUESTS`, `IDA_MCP_LOG_SKIP_METHODS`.
+
+
+## HTTP sessions
+
+The streamable HTTP endpoint requires an MCP session. Send `initialize` first, then
+echo the `Mcp-Session-Id` from its response header on every subsequent request:
+
+```sh
+SESSION=$(curl -s -D - -o /dev/null -X POST http://127.0.0.1:13337/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}' \
+  | grep -i '^mcp-session-id:' | tr -d '\r' | cut -d' ' -f2)
+
+curl -s -X POST http://127.0.0.1:13337/mcp \
+  -H "Content-Type: application/json" -H "Mcp-Session-Id: $SESSION" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+A request without the header is rejected with HTTP 400 and a JSON-RPC error. This keeps
+concurrent agents distinguishable instead of silently sharing one anonymous context.
+Spec-compliant MCP clients do this automatically; `ida-pro-mcp` running over stdio
+identifies itself to IDA with a per-process session id.
+
+Set `IDA_MCP_REQUIRE_SESSION=0` to restore the old session-less behavior.
 
 
 ## MCP Resources
